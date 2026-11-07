@@ -61,6 +61,28 @@ asosiy bot orqali superadminga xabar boradi.
   botlari tokenlarini qayta kiritishga to'g'ri keladi. Token BotFather'da bekor qilinsa, bot avtomatik to'xtaydi va
   superadminga xabar boradi.
 
+## Anonimlik rejimi (har bir bot uchun)
+
+- Superadmin: bot kartasi → «Anonimlik: yoqilgan/o'chirilgan». Standart holatda **yoqilgan**.
+- **Yoqilgan:** murojaatchi anonim, adminlar uning shaxsini ko'rmaydi.
+- **O'chirilgan:** admin kartasida murojaatchining ismi (bosiladigan), username va Telegram ID'si ko'rinadi.
+  Shuningdek «Murojaatchi bilan bog'lanish» tugmasi chiqadi. Talabaga bu bot boshida, yordamda va murojaat
+  yozishda «murojaat anonim emas» deb aniq aytiladi. Bot tavsifi ham shunga moslanadi.
+- Rejim har bir murojaatga yuborilgan paytda yoziladi:
+  - eski anonim murojaatlar rejim o'zgarganda ham anonim qoladi;
+  - talaba anonim rejimda yozishni boshlagan bo'lsa, murojaati anonim ketadi.
+- Telegram bot'larga telefon raqamini bermaydi (foydalanuvchi o'zi ulashmasa). Username bo'lmasa va
+  profil yopiq bo'lsa, bog'lanish tugmasi chiqmaydi, lekin ism va ID baribir ko'rinadi.
+
+## Bir nechta admin — sinxron ishlash
+
+Murojaat bo'limning barcha faol adminlariga keladi:
+- Holat atomik o'zgaradi: ikki admin bir vaqtda «Qabul qilish»ni bossa, faqat bittasi qabul qiladi.
+  Ikkinchisiga «allaqachon qabul qilingan (Ism)» degan ogohlantirish chiqadi.
+- Har qanday amaldan keyin (qabul, rad, javob, yopish, qayta ochish) barcha adminlardagi karta bir zumda yangilanadi.
+  Kartada holat, mas'ul admin va o'sha holatga mos tugmalar ko'rinadi.
+- Qabul qilingan murojaatga istalgan admin javob yoza oladi.
+
 ## Murojaat kategoriyalari (ixtiyoriy)
 
 - Superadmin: Asosiy bot → Bo'lim botlari → bot → «Murojaat kategoriyalari» → «Kategoriya qo'shish».

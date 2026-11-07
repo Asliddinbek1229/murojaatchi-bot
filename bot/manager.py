@@ -308,11 +308,16 @@ class BotManager:
                 BotCommand(command="start", description="Bosh menyu"),
                 BotCommand(command="cancel", description="Amalni bekor qilish"),
             ])
-            await bot.set_my_short_description(f"{rec['title']} — anonim murojaatlar boti")
+            anon = bool(rec.get("anonymous", 1))
+            await bot.set_my_short_description(
+                f"{rec['title']} — {'anonim murojaatlar' if anon else 'murojaatlar'} boti"
+            )
             await bot.set_my_description(
-                f"«{rec['title']}» bo'limiga anonim murojaat yuborish boti.\n\n"
+                f"«{rec['title']}» bo'limiga {'anonim ' if anon else ''}murojaat yuborish boti.\n\n"
                 "Shikoyat, taklif yoki savolingizni matn, rasm, video yoki fayl ko'rinishida yuboring. "
-                "Ismingiz va ma'lumotlaringiz hech kimga ko'rsatilmaydi.\n\nBoshlash uchun «Start» ni bosing."
+                + ("Ismingiz va ma'lumotlaringiz hech kimga ko'rsatilmaydi." if anon else
+                   "Murojaat anonim emas: ismingiz va Telegram profilingiz bo'lim xodimlariga ko'rinadi.")
+                + "\n\nBoshlash uchun «Start» ni bosing."
             )
         except TelegramAPIError as ex:
             log.warning("@%s profilini sozlab bo'lmadi: %s", rec["username"], ex)

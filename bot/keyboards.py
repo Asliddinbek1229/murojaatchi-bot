@@ -95,7 +95,7 @@ def collect_actions_kb(count: int) -> InlineKeyboardMarkup:
 
 
 # ---------- Murojaatlar ----------
-def appeal_actions_kb(appeal_id: int, status: str, is_super=False) -> InlineKeyboardMarkup:
+def appeal_actions_kb(appeal_id: int, status: str, is_super=False, contact: str | None = None) -> InlineKeyboardMarkup:
     """Murojaat kartasi tugmalari — holatga qarab faqat mumkin bo'lgan amallar ko'rsatiladi."""
     a = appeal_id
     if status == "new":
@@ -109,6 +109,8 @@ def appeal_actions_kb(appeal_id: int, status: str, is_super=False) -> InlineKeyb
     second = [ibtn("history", "Tarix", f"ap:history:{a}")]
     if is_super:
         second.append(ibtn("block", "Muallifni bloklash", f"blk:ask:{a}", RED))
+    if contact:  # anonim bo'lmagan murojaat
+        return ikb(first, [url_btn("user", "Murojaatchi bilan bog'lanish", contact)], second)
     return ikb(first, second)
 
 
@@ -191,6 +193,8 @@ def bot_card_kb(b: dict, running: bool) -> InlineKeyboardMarkup:
         [ibtn("admins", "Adminlar", f"sa:admins:{bid}", BLUE), ibtn("stats", "Statistika", f"sa:bot_stats:{bid}")],
         [ibtn("envelope", "Murojaatlari", f"sa:apf:{bid}:all:0"), ibtn("report", "Excel hisobot", f"sa:rpb:{bid}", GREEN)],
         [ibtn("category", "Murojaat kategoriyalari", f"sa:cats:{bid}", BLUE)],
+        [ibtn("lock", "Anonimlik: yoqilgan", f"sa:bot_anon:{bid}") if b.get("anonymous", 1)
+         else ibtn("user", "Anonimlik: o'chirilgan", f"sa:bot_anon:{bid}")],
         [url_btn("open", "Botni ochish", f"https://t.me/{b['username']}", None)],
         [toggle],
         [ibtn("edit", "Bo'lim nomini o'zgartirish", f"sa:bot_rename:{bid}"), ibtn("key", "Tokenni almashtirish", f"sa:bot_token:{bid}")],

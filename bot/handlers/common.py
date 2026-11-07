@@ -52,7 +52,10 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext,
             "[[bell]] Yangi murojaatlar shu yerga avtomatik keladi.\n"
             "[[inbox]] «Ochiq murojaatlar» — javob kutayotganlar ro'yxati.\n"
             "[[reply]] Murojaat ostidagi «Javob yozish» orqali javob qaytarasiz.</blockquote>\n"
-            "[[lock]] Talabalar anonim — ularning kimligi sizga ko'rsatilmaydi."
+            + ("[[lock]] Bu botda murojaatchilar anonim — ularning kimligi sizga ko'rsatilmaydi."
+               if bot_rec.get("anonymous", 1) else
+               "[[user]] Bu botda murojaatlar anonim emas — murojaatchi ismi, username va ID si kartada ko'rinadi, "
+               "«Murojaatchi bilan bog'lanish» tugmasi orqali unga yozishingiz mumkin.")
         ), reply_markup=menu)
         if args.startswith("ap_") and args[3:].isdigit():
             appeal = await db.get_appeal(int(args[3:]))
@@ -64,7 +67,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext,
             "[[stop]] Siz bu botda admin emassiz yoki adminligingiz to'xtatilgan.\n"
             "Superadmin bilan bog'laning."
         ))
-    await message.answer(student_welcome(title), reply_markup=menu)
+    await message.answer(student_welcome(title, bool(bot_rec.get("anonymous", 1))), reply_markup=menu)
 
 
 @router.message(Command("cancel"))

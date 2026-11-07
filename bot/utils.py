@@ -160,6 +160,37 @@ async def drop_ack(bot: Bot, chat_id: int, state: FSMContext):
 
 
 # ---------- Murojaatni ko'rsatish / yetkazish ----------
+def is_open_identity(appeal: dict) -> bool:
+    """Murojaatchi shaxsi ko'rsatiladimi: faqat murojaat anonim EMAS rejimda yuborilgan bo'lsa."""
+    return appeal.get("anonymous", 1) == 0
+
+
+def author_lines(appeal: dict) -> list[str]:
+    if not is_open_identity(appeal):
+        return [f"{e('lock')} Murojaatchi: <i>anonim</i>"]
+    uid = appeal["user_id"]
+    name = esc(appeal.get("author_name") or "Foydalanuvchi")
+    lines = [f'{e("user")} Murojaatchi: <a href="tg://user?id={uid}">{name}</a>']
+    if appeal.get("author_username"):
+        lines.append(f"{e('link')} Username: @{esc(appeal['author_username'])}")
+    lines.append(f"{e('id')} Telegram ID: <code>{uid}</code>")
+    return lines
+
+
+def contact_url(appeal: dict, allow_id_link: bool = True) -> str | None:
+    """«Murojaatchi bilan bog'lanish» tugmasi havolasi (faqat anonim bo'lmagan murojaatda)."""
+    if not is_open_identity(appeal):
+        return None
+    if appeal.get("author_username"):
+        return f"https://t.me/{appeal['author_username']}"
+    return f"tg://user?id={appeal['user_id']}" if allow_id_link else None
+
+
+def _privacy_error(ex: Exception) -> bool:
+    # foydalanuvchi maxfiylik sozlamasi tg://user?id havolasini taqiqlagan bo'lsa
+    return "BUTTON_USER_PRIVACY_RESTRICTED" in str(ex) or "USER_PRIVACY" in str(ex)
+
+
 def appeal_header(appeal: dict) -> str:
     where = appeal.get("bot_title") or "O'chirilgan bot"
     lines = [
@@ -167,6 +198,7 @@ def appeal_header(appeal: dict) -> str:
         *([f"{e('category')} Mavzu: <b>{esc(appeal['category_title'])}</b>"] if appeal.get("category_title") else []),
         f"{e('clock')} Vaqt: {tg_time(appeal['created_at'])}",
         f"Holati: <b>{status_label(appeal['status'])}</b>",
+        *author_lines(appeal),
     ]
     if appeal["status"] != "new" and appeal.get("admin_name"):
         lines.append(f"{e('user')} Mas'ul: {esc(appeal['admin_name'])}")
@@ -191,7 +223,7 @@ def card_text(appeal: dict, types: list[str]) -> str:
 
 
 async def send_appeal(bot: Bot, chat_id: int, db: Database, appeal: dict, history=False):
-    """Murojaatni (anonim) chat_id ga yuboradi: kontent + oxirida boshqaruv kartasi.
+    """Murojaatni chat_id ga yuboradi (anonim bo'lsa — muallifsiz): kontent + oxirida boshqaruv kartasi.
     Karta ro'yxatga olinadi — holat o'zgarsa, barcha adminlardagi kartalar avtomatik yangilanadi.
     Faqat murojaat kelgan botning o'zida ishlaydi (file_id lar botga bog'liq)."""
     from bot.keyboards import appeal_actions_kb
@@ -206,11 +238,16 @@ async def send_appeal(bot: Bot, chat_id: int, db: Database, appeal: dict, histor
             await bot.send_message(chat_id, f"{e('history')} <b>Berilgan javoblar ({len(answers)} ta):</b>")
             for m in answers:
                 await send_content(bot, chat_id, {"type": m["content_type"], "file_id": m["file_id"], "text": m["text"]})
-    card = await bot.send_message(
-        chat_id,
-        card_text(appeal, [m["content_type"] for m in student_msgs]),
-        reply_markup=appeal_actions_kb(appeal["id"], appeal["status"], chat_id in config.superadmin_ids),
-    )
+    text = card_text(appeal, [m["content_type"] for m in student_msgs])
+    is_super = chat_id in config.superadmin_ids
+    try:
+        card = await bot.send_message(chat_id, text, reply_markup=appeal_actions_kb(
+            appeal["id"], appeal["status"], is_super, contact_url(appeal)))
+    except TelegramBadRequest as ex:
+        if not _privacy_error(ex):
+            raise
+        card = await bot.send_message(chat_id, text, reply_markup=appeal_actions_kb(
+            appeal["id"], appeal["status"], is_super, contact_url(appeal, allow_id_link=False)))
     await db.add_card(appeal["id"], chat_id, card.message_id)
     return card
 
@@ -225,12 +262,21 @@ async def refresh_cards(bot: Bot, db: Database, appeal_id: int):
     types = [m["content_type"] for m in await db.appeal_messages(appeal_id) if m["sender"] == "student"]
     text = card_text(appeal, types)
 
+    async def _edit(card, allow_id_link=True):
+        await bot.edit_message_text(
+            text=text, chat_id=card["chat_id"], message_id=card["message_id"],
+            reply_markup=appeal_actions_kb(appeal_id, appeal["status"], card["chat_id"] in config.superadmin_ids,
+                                           contact_url(appeal, allow_id_link)),
+        )
+
     async def _one(card):
         try:
-            await bot.edit_message_text(
-                text=text, chat_id=card["chat_id"], message_id=card["message_id"],
-                reply_markup=appeal_actions_kb(appeal_id, appeal["status"], card["chat_id"] in config.superadmin_ids),
-            )
+            try:
+                await _edit(card)
+            except TelegramBadRequest as ex:
+                if not _privacy_error(ex):
+                    raise
+                await _edit(card, allow_id_link=False)
         except TelegramBadRequest as ex:
             if "not modified" not in str(ex):
                 await db.delete_card(appeal_id, card["chat_id"], card["message_id"])
@@ -272,7 +318,8 @@ async def deliver_new_appeal(bot: Bot, db: Database, manager, appeal_id: int) ->
 
     async def _one(uid: int) -> bool:
         try:
-            await bot.send_message(uid, R("[[bell]] <b>Yangi anonim murojaat keldi!</b>"))
+            await bot.send_message(uid, R("[[bell]] <b>Yangi anonim murojaat keldi!</b>" if not is_open_identity(appeal)
+                                          else "[[bell]] <b>Yangi murojaat keldi!</b>"))
             await send_appeal(bot, uid, db, appeal)
             return True
         except TelegramAPIError as ex:

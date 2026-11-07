@@ -5,7 +5,8 @@ Varaqlar:
   2. «Bo'limlar»   — (faqat «barcha botlar» hisobotida) har bir bo'lim kesimida
   3. «Kategoriyalar» — (kategoriyalar bo'lsa) kategoriya kesimida holatlar, tezlik, dinamika, adminlar
   4. «Adminlar»    — har bir admin faoliyati
-  5. «Murojaatlar» — har bir murojaat (anonim: talaba haqida hech qanday ma'lumot yo'q)
+  5. «Murojaatlar» — har bir murojaat. Anonim murojaatlarda muallif haqida hech qanday ma'lumot yo'q;
+                     anonimlik o'chirilgan botlarda — murojaatchi ismi, username va ID si.
 """
 import asyncio
 import html
@@ -98,6 +99,17 @@ def _msg_line(m: dict) -> str:
     return f"[{CONTENT_NAMES.get(t, t)}]" + (f" {body}" if body else "")
 
 
+def _author(a: dict) -> str:
+    """Murojaatchi — faqat anonim bo'lmagan murojaatda; aks holda «Anonim»."""
+    if a.get("anonymous", 1) != 0:
+        return "Anonim"
+    parts = [clean(a.get("author_name")) or "Foydalanuvchi"]
+    if a.get("author_username"):
+        parts.append(f"@{a['author_username']}")
+    parts.append(f"ID {a['user_id']}")
+    return ", ".join(parts)
+
+
 def prepare(data: dict) -> dict:
     """Xom ma'lumotdan hisobot qatorlari va ko'rsatkichlarni hisoblaydi."""
     by_appeal_msgs: dict[int, list] = {}
@@ -151,6 +163,8 @@ def prepare(data: dict) -> dict:
             "bot": a.get("bot_title") or "O'chirilgan bot",
             "category": a.get("category_title") or (NO_CATEGORY if a.get("category_id") is None else "O'chirilgan kategoriya"),
             "admin_id": answers[0]["sender_id"] if answers else None,
+            "open_identity": a.get("anonymous", 1) == 0,
+            "author": _author(a),
             "status": a["status"],
             "admin": a.get("admin_name") or "",
             "text": "\n".join(_msg_line(m) for m in student),
@@ -517,6 +531,10 @@ def _sheet_appeals(ws, title: str, sub: list[str], rep: dict, with_bot: bool):
              "Reaksiya (soat)", "Javob muddati (soat)"]
     widths = [8, 17, 17, 22, 60, 18, 50, 28, 12, 14]
     with_cat = rep["has_categories"]
+    with_author = any(x["open_identity"] for x in rep["rows"])
+    if with_author:
+        heads.insert(3, "Murojaatchi")
+        widths.insert(3, 30)
     if with_cat:
         heads.insert(2, "Kategoriya")
         widths.insert(2, 22)
@@ -525,7 +543,10 @@ def _sheet_appeals(ws, title: str, sub: list[str], rep: dict, with_bot: bool):
         widths.insert(2, 20)
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
-    r = _title(ws, title, sub + ["Talabalar anonim: hisobotda ularning shaxsi haqida hech qanday ma'lumot yo'q."], len(heads))
+    note = ("Anonim murojaatlarda muallif haqida hech qanday ma'lumot yo'q; «Murojaatchi» ustuni faqat "
+            "anonimlik o'chirilgan botlarga yuborilgan murojaatlarda to'ldirilgan." if with_author else
+            "Murojaatlar anonim: hisobotda murojaatchilar shaxsi haqida hech qanday ma'lumot yo'q.")
+    r = _title(ws, title, sub + [note], len(heads))
     data, statuses = [], []
     for x in rep["rows"]:
         row = [
@@ -535,6 +556,8 @@ def _sheet_appeals(ws, title: str, sub: list[str], rep: dict, with_bot: bool):
             x["react_h"] if x["react_h"] is not None else "—",
             x["answer_h"] if x["answer_h"] is not None else "—",
         ]
+        if with_author:
+            row.insert(3, x["author"])
         if with_cat:
             row.insert(2, x["category"])
         if with_bot:
@@ -542,6 +565,8 @@ def _sheet_appeals(ws, title: str, sub: list[str], rep: dict, with_bot: bool):
         data.append(row)
         statuses.append(x["status"])
     aligns = [CENTER, CENTER, CENTER, LEFT, LEFT, LEFT, LEFT, LEFT, CENTER, CENTER]
+    if with_author:
+        aligns.insert(3, LEFT)
     if with_cat:
         aligns.insert(2, LEFT)
     if with_bot:

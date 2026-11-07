@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS bots (
     title       TEXT NOT NULL,
     token_enc   TEXT NOT NULL,
     is_active   INTEGER NOT NULL DEFAULT 1,
+    anonymous   INTEGER NOT NULL DEFAULT 1,   -- 1: murojaatchi anonim; 0: ismi/username/ID adminlarga ko'rinadi
     last_error  TEXT,
     added_at    TEXT NOT NULL
 );
@@ -50,7 +51,8 @@ CREATE TABLE IF NOT EXISTS appeals (
     status       TEXT NOT NULL DEFAULT 'new',  -- new | in_progress | answered | closed
     admin_id     INTEGER,
     created_at   TEXT NOT NULL,
-    updated_at   TEXT NOT NULL
+    updated_at   TEXT NOT NULL,
+    anonymous    INTEGER NOT NULL DEFAULT 1   -- yuborilgan paytdagi rejim (keyin o'zgarsa ham eski murojaat anonim qoladi)
 );
 
 CREATE TABLE IF NOT EXISTS appeal_messages (
@@ -127,10 +129,12 @@ STATUSES = {
 OPEN_STATUSES = ["new", "in_progress"]  # «Ochiq murojaatlar» — hali javob berilmaganlar
 
 _APPEAL_SELECT = """SELECT ap.*, b.title AS bot_title, b.username AS bot_username,
-                           ad.full_name AS admin_name, c.title AS category_title
+                           ad.full_name AS admin_name, c.title AS category_title,
+                           au.full_name AS author_name, au.username AS author_username
                     FROM appeals ap
                     LEFT JOIN bots b ON b.id = ap.bot_id
                     LEFT JOIN users ad ON ad.user_id = ap.admin_id
+                    LEFT JOIN users au ON au.user_id = ap.user_id
                     LEFT JOIN categories c ON c.id = ap.category_id"""
 
 
@@ -165,6 +169,11 @@ class Database:
             await self.conn.execute("ALTER TABLE appeals ADD COLUMN reject_reason TEXT")
         if "category_id" not in cols:
             await self.conn.execute("ALTER TABLE appeals ADD COLUMN category_id INTEGER")
+        if "anonymous" not in cols:
+            await self.conn.execute("ALTER TABLE appeals ADD COLUMN anonymous INTEGER NOT NULL DEFAULT 1")
+        bot_cols = {r["name"] for r in await self._all("PRAGMA table_info(bots)")}
+        if "anonymous" not in bot_cols:
+            await self.conn.execute("ALTER TABLE bots ADD COLUMN anonymous INTEGER NOT NULL DEFAULT 1")
         await self._migrate_legacy_categories()
 
     async def _migrate_legacy_categories(self):
@@ -316,6 +325,9 @@ class Database:
     async def set_bot_active(self, bot_id: int, active: bool, error: str | None = None):
         await self._exec("UPDATE bots SET is_active=?, last_error=? WHERE id=?", (int(active), error, bot_id))
 
+    async def set_bot_anonymous(self, bot_id: int, anonymous: bool):
+        await self._exec("UPDATE bots SET anonymous=? WHERE id=?", (int(anonymous), bot_id))
+
     async def rename_bot(self, bot_id: int, title: str):
         await self._exec("UPDATE bots SET title=? WHERE id=?", (title, bot_id))
 
@@ -384,11 +396,13 @@ class Database:
         )
 
     # ---------- appeals ----------
-    async def create_appeal(self, bot_id: int, user_id: int, category_id: int | None = None) -> int:
+    async def create_appeal(self, bot_id: int, user_id: int, category_id: int | None = None,
+                            anonymous: bool = True) -> int:
         t = now()
         cur = await self._exec(
-            "INSERT INTO appeals(bot_id, user_id, status, created_at, updated_at, category_id) VALUES (?,?,?,?,?,?)",
-            (bot_id, user_id, "new", t, t, category_id),
+            "INSERT INTO appeals(bot_id, user_id, status, created_at, updated_at, category_id, anonymous) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (bot_id, user_id, "new", t, t, category_id, int(anonymous)),
         )
         return cur.lastrowid
 

@@ -187,6 +187,8 @@ def _bot_card_text(b: dict, running: bool, admins: int) -> str:
         f"Holati: {state}\n"
         f"[[admins]] Adminlar: <b>{admins}</b>\n"
         f"[[category]] Kategoriyalar: <b>{b.get('categories') or 'yo‘q'}</b>\n"
+        + ("[[lock]] Murojaatchilar: <b>anonim</b>\n" if b.get("anonymous", 1)
+           else "[[user]] Murojaatchilar: <b>anonim emas</b> (ismi, username, ID adminlarga ko'rinadi)\n") +
         f"[[envelope]] Murojaatlar: <b>{b.get('appeals', 0)}</b> (ochiq: {b.get('open_appeals', 0)})\n"
         f"[[calendar]] Qo'shilgan: {b['added_at'][:16]}{err}</blockquote>"
     )
@@ -303,6 +305,48 @@ async def bot_toggle(call: CallbackQuery, db: Database, manager: BotManager):
             msg = f"Ishga tushmadi: {ex}"[:190]
     await _bot_card(call.message, db, manager, bid)
     await call.answer(msg, show_alert=msg.startswith("Ishga tushmadi"))
+
+
+# ---- Anonimlik rejimi ----
+@router.callback_query(F.data.startswith("sa:bot_anon:"))
+async def bot_anon_ask(call: CallbackQuery, db: Database, manager: BotManager):
+    bid = int(call.data.split(":")[2])
+    b = await db.get_bot(bid)
+    if not b:
+        return await call.answer("Bot topilmadi", show_alert=True)
+    if not b["anonymous"]:  # anonimlikni qayta yoqish — maxfiylikni oshiradi, tasdiq shart emas
+        await _set_anon(call, db, manager, bid, True)
+        return
+    await call.message.edit_text(
+        R(
+            f"[[user]] <b>«{esc(b['title'])}» botida anonimlikni o'chirasizmi?</b>\n\n"
+            "<blockquote>Shundan keyin yangi murojaatlarda adminlarga ko'rinadi:\n"
+            "• murojaatchining ismi, username va Telegram ID'si;\n"
+            "• «Murojaatchi bilan bog'lanish» tugmasi.</blockquote>\n"
+            "[[lock]] <b>Oldin yuborilgan anonim murojaatlar anonim qoladi</b> — ularning muallifi hech qachon ochilmaydi.\n"
+            "[[tip]] Talabalarga bot boshida va murojaat yozishda «murojaat anonim emas» deb aniq aytiladi."
+        ),
+        reply_markup=confirm_kb(f"sa:bot_anonok:{bid}:0", f"sa:bot:{bid}"),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("sa:bot_anonok:"))
+async def bot_anon_off(call: CallbackQuery, db: Database, manager: BotManager):
+    _, _, bid, value = call.data.split(":")
+    await _set_anon(call, db, manager, int(bid), value == "1")
+
+
+async def _set_anon(call: CallbackQuery, db: Database, manager: BotManager, bid: int, anonymous: bool):
+    await db.set_bot_anonymous(bid, anonymous)
+    await manager.refresh_record(bid)
+    await manager.setup_profile(bid)  # bot tavsifi ham rejimga moslanadi
+    await _bot_card(call.message, db, manager, bid)
+    await call.answer(
+        "Anonimlik yoqildi: yangi murojaatlar anonim bo'ladi." if anonymous
+        else "Anonimlik o'chirildi: yangi murojaatlarda murojaatchi ma'lumotlari ko'rinadi.",
+        show_alert=True,
+    )
 
 
 @router.callback_query(F.data.startswith("sa:bot_rename:"))
