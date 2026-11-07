@@ -1,5 +1,6 @@
-aiogram>=3.13,<4
-aiosqlite>=0.20
-python-dotenv>=1.0
-cryptography>=43
-openpyxl>=3.1
+# Sinovdan o'tgan aniq versiyalar (Python 3.10+)
+aiogram==3.31.0
+aiosqlite==0.22.1
+python-dotenv==1.2.4
+cryptography==50.0.2
+openpyxl==3.1.5

@@ -125,7 +125,8 @@ def appeals_list_kb(appeals: list[dict], back: str | None = None, nav: list | No
     for a in appeals:
         key = STATUSES.get(a["status"], ("st_new",))[0]
         where = a.get("bot_title") or "O'chirilgan bot"
-        rows.append([ibtn(key, f"#{a['id']} · {where} · {a['created_at'][5:16]}", f"{cb_prefix}:{a['id']}")])
+        cat = f" · {a['category_title'][:24]}" if a.get("category_title") else ""
+        rows.append([ibtn(key, f"#{a['id']} · {where}{cat} · {a['created_at'][5:16]}", f"{cb_prefix}:{a['id']}")])
     if nav:
         rows.append(nav)
     if back:
@@ -189,12 +190,55 @@ def bot_card_kb(b: dict, running: bool) -> InlineKeyboardMarkup:
     return ikb(
         [ibtn("admins", "Adminlar", f"sa:admins:{bid}", BLUE), ibtn("stats", "Statistika", f"sa:bot_stats:{bid}")],
         [ibtn("envelope", "Murojaatlari", f"sa:apf:{bid}:all:0"), ibtn("report", "Excel hisobot", f"sa:rpb:{bid}", GREEN)],
+        [ibtn("category", "Murojaat kategoriyalari", f"sa:cats:{bid}", BLUE)],
         [url_btn("open", "Botni ochish", f"https://t.me/{b['username']}", None)],
         [toggle],
         [ibtn("edit", "Bo'lim nomini o'zgartirish", f"sa:bot_rename:{bid}"), ibtn("key", "Tokenni almashtirish", f"sa:bot_token:{bid}")],
         [ibtn("trash", "Botni o'chirish", f"sa:bot_del:{bid}", RED)],
         [ibtn("back", "Orqaga", "sa:bots")],
     )
+
+
+# ---------- Kategoriyalar ----------
+def categories_kb(bid: int, cats: list[dict]) -> InlineKeyboardMarkup:
+    rows = [
+        [ibtn("active" if c["is_active"] else "inactive", f"{c['title']} · {c['appeals']}", f"sa:cat:{c['id']}")]
+        for c in cats
+    ]
+    rows.append([ibtn("add", "Kategoriya qo'shish", f"sa:cat_add:{bid}", GREEN)])
+    rows.append([ibtn("back", "Orqaga", f"sa:bot:{bid}")])
+    return ikb(*rows)
+
+
+def category_card_kb(cat: dict, first: bool, last: bool) -> InlineKeyboardMarkup:
+    cid = cat["id"]
+    toggle = (
+        ibtn("inactive", "Yashirish", f"sa:cat_tog:{cid}", RED) if cat["is_active"]
+        else ibtn("active", "Ko'rsatish", f"sa:cat_tog:{cid}", GREEN)
+    )
+    move = []
+    if not first:
+        move.append(ibtn("up", "Yuqoriga", f"sa:cat_mv:{cid}:-1"))
+    if not last:
+        move.append(ibtn("down", "Pastga", f"sa:cat_mv:{cid}:1"))
+    rows = [[ibtn("edit", "Nomini o'zgartirish", f"sa:cat_ren:{cid}"), toggle]]
+    if cat.get("description"):
+        rows.append([ibtn("info", "Izohni o'zgartirish", f"sa:cat_desc:{cid}", BLUE),
+                     ibtn("trash", "Izohni o'chirish", f"sa:cat_descdel:{cid}")])
+    else:
+        rows.append([ibtn("info", "Izoh qo'shish", f"sa:cat_desc:{cid}", GREEN)])
+    if move:
+        rows.append(move)
+    rows.append([ibtn("trash", "O'chirish", f"sa:cat_del:{cid}", RED)])
+    rows.append([ibtn("back", "Orqaga", f"sa:cats:{cat['bot_id']}")])
+    return ikb(*rows)
+
+
+def category_pick_kb(cats: list[dict]) -> InlineKeyboardMarkup:
+    """Talaba uchun: murojaat kategoriyasini tanlash."""
+    rows = [[ibtn("category", c["title"], f"cat:pick:{c['id']}")] for c in cats]
+    rows.append([ibtn("cancel", "Bekor qilish", "col:cancel", RED)])
+    return ikb(*rows)
 
 
 def bot_admins_kb(bid: int, admins: list[dict]) -> InlineKeyboardMarkup:

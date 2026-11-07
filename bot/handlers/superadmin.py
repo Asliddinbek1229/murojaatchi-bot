@@ -64,7 +64,8 @@ def panel_text() -> str:
         "[[envelope]] <b>Murojaatlar</b> — ko'rish va qidirish\n"
         "[[block]] <b>Bloklanganlar</b> — bloklangan mualliflar\n"
         "[[broadcast]] <b>E'lon</b> — foydalanuvchilarga xabar\n"
-        f"[[sparkles]] <b>Premium emojilar</b> — {custom_count()} ta sozlangan</blockquote>"
+        f"[[sparkles]] <b>Premium emojilar</b> — {custom_count()} ta sozlangan</blockquote>\n"
+        "<i>Tizim: /status — holat, /backup — baza nusxasi</i>"
     )
 
 
@@ -132,6 +133,15 @@ async def bot_stats(call: CallbackQuery, db: Database):
     s = await db.stats(bid)
     admins = await db.bot_admins(bid)
     top = "\n".join(f"• {esc(a['full_name'])}: <b>{a['answered']}</b>" for a in admins) or "—"
+    cats = await db.category_stats(bid)
+    cat_block = ""
+    if any(c["title"] for c in cats):
+        lines = [
+            f"• {esc(c['title'] or 'Kategoriyasiz')}{' (o‘chirilgan)' if c['is_deleted'] else ''}: <b>{c['total']}</b>"
+            f" — ochiq {c['open'] or 0}, hal qilingan {c['done'] or 0}, rad {c['rejected'] or 0}"
+            for c in cats
+        ]
+        cat_block = "\n[[category]] <b>Kategoriyalar bo'yicha:</b>\n<blockquote expandable>" + "\n".join(lines) + "</blockquote>"
     await call.message.edit_text(
         R(
             f"[[stats]] <b>{esc(b['title'])}</b> — statistika\n\n"
@@ -139,6 +149,7 @@ async def bot_stats(call: CallbackQuery, db: Database):
             f"[[envelope]] Murojaatlar: jami <b>{s['total']}</b>, bugun <b>{s['today']}</b></blockquote>\n"
             f"<blockquote>{_statuses(s)}</blockquote>\n"
             f"[[admins]] <b>Adminlar</b> (javob berilgan):\n<blockquote>{top}</blockquote>"
+            + cat_block
         ),
         reply_markup=back_kb(f"sa:bot:{bid}"),
     )
@@ -175,6 +186,7 @@ def _bot_card_text(b: dict, running: bool, admins: int) -> str:
         f"<blockquote>[[link]] Bot: @{esc(b['username'])}\n"
         f"Holati: {state}\n"
         f"[[admins]] Adminlar: <b>{admins}</b>\n"
+        f"[[category]] Kategoriyalar: <b>{b.get('categories') or 'yo‘q'}</b>\n"
         f"[[envelope]] Murojaatlar: <b>{b.get('appeals', 0)}</b> (ochiq: {b.get('open_appeals', 0)})\n"
         f"[[calendar]] Qo'shilgan: {b['added_at'][:16]}{err}</blockquote>"
     )

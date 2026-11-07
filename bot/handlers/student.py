@@ -12,13 +12,14 @@ from bot.keyboards import (
     RB_MY,
     RB_NEW,
     RB_SEND,
+    category_pick_kb,
     collect_kb,
     student_menu,
 )
 from bot.states import AppealSG
-from bot.texts import appeal_sent, content_prompt, student_help
-from bot.ui import R, match, status_label, tg_time
-from bot.utils import collect, deliver_new_appeal, drop_ack, preview, undo_last, user_lock
+from bot.texts import appeal_sent, category_prompt, content_prompt, student_help
+from bot.ui import R, e, match, status_label, tg_time
+from bot.utils import collect, deliver_new_appeal, drop_ack, esc, preview, undo_last, user_lock
 
 log = logging.getLogger(__name__)
 
@@ -30,11 +31,49 @@ PLACEHOLDER = "Murojaatingizni yozing yoki fayl yuboring..."
 
 
 @router.message(match(RB_NEW))
-async def new_appeal(message: Message, state: FSMContext, bot: Bot):
+async def new_appeal(message: Message, state: FSMContext, bot: Bot, db: Database, bot_id: int):
     await drop_ack(bot, message.chat.id, state)
+    cats = await db.categories(bot_id, only_active=True)
+    if cats:  # bu botda kategoriyalar bor — avval mavzu tanlanadi
+        await state.set_state(AppealSG.category)
+        await state.set_data({})
+        await message.answer(category_prompt(), reply_markup=category_pick_kb(cats))
+        return
+    await _start_content(message, state, None, None)
+
+
+async def _start_content(message: Message, state: FSMContext, cat_id: int | None, cat_title: str | None,
+                         description: str | None = None):
     await state.set_state(AppealSG.content)
-    await state.set_data({"items": [], "ack_id": None})
-    await message.answer(content_prompt(), reply_markup=collect_kb(PLACEHOLDER))
+    await state.set_data({"items": [], "ack_id": None, "category_id": cat_id, "category": cat_title})
+    await message.answer(content_prompt(cat_title, description), reply_markup=collect_kb(PLACEHOLDER))
+
+
+@router.callback_query(AppealSG.category, F.data.startswith("cat:pick:"))
+async def pick_category(call: CallbackQuery, state: FSMContext, db: Database, bot_id: int):
+    cat = await db.get_category(int(call.data.split(":")[2]))
+    if not cat or cat["bot_id"] != bot_id or not cat["is_active"]:
+        cats = await db.categories(bot_id, only_active=True)
+        await call.answer("Bu mavzu endi mavjud emas, boshqasini tanlang.", show_alert=True)
+        if cats:
+            await call.message.edit_reply_markup(reply_markup=category_pick_kb(cats))
+        else:
+            await call.message.edit_text(R("[[category]] Mavzu tanlash shart emas."))
+            await _start_content(call.message, state, None, None)
+        return
+    await call.answer()
+    await call.message.edit_text(R(f"[[category]] Mavzu: <b>{esc(cat['title'])}</b>"))
+    await _start_content(call.message, state, cat["id"], cat["title"], cat.get("description"))
+
+
+@router.message(AppealSG.category)
+async def category_expected(message: Message, db: Database, bot_id: int):
+    cats = await db.categories(bot_id, only_active=True)
+    await message.answer(
+        R("[[warn]] Avval murojaat <b>mavzusini</b> tanlang — pastdagi tugmalardan birini bosing.\n"
+          "Matn va fayllarni mavzu tanlangandan keyin yuborasiz."),
+        reply_markup=category_pick_kb(cats) if cats else None,
+    )
 
 
 async def _submit(bot: Bot, db: Database, manager, state: FSMContext, chat_id: int, user_id: int, bot_id: int):
@@ -52,11 +91,14 @@ async def _submit(bot: Bot, db: Database, manager, state: FSMContext, chat_id: i
             return
         await drop_ack(bot, chat_id, state)
         await state.clear()
-        appeal_id = await db.create_appeal(bot_id, user_id)
+        cat_id, cat_title = data.get("category_id"), data.get("category")
+        if cat_id and not await db.get_category(cat_id):  # yozish paytida o'chirilgan bo'lsa
+            cat_id, cat_title = None, None
+        appeal_id = await db.create_appeal(bot_id, user_id, cat_id)
         for item in items:
             await db.add_message(appeal_id, "student", user_id, item)
     # talabaga darhol javob, adminlarga yetkazish fonda (tez ishlashi uchun)
-    await bot.send_message(chat_id, appeal_sent(appeal_id), reply_markup=student_menu())
+    await bot.send_message(chat_id, appeal_sent(appeal_id, cat_title), reply_markup=student_menu())
     task = asyncio.create_task(deliver_new_appeal(bot, db, manager, appeal_id))
     task.add_done_callback(_log_task_error)
 
@@ -107,7 +149,8 @@ async def my_appeals(message: Message, db: Database, bot_id: int):
         return
     blocks = [
         f"<b>#{a['id']}</b> · {tg_time(a['created_at'])}\n"
-        f"{status_label(a['status'])}"
+        + (f"{e('category')} {esc(a['category_title'])}\n" if a.get("category_title") else "")
+        + status_label(a["status"])
         for a in appeals
     ]
     await message.answer(

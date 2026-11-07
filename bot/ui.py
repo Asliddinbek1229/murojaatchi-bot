@@ -98,6 +98,11 @@ EMOJI: dict[str, tuple[str, str]] = {
     "invite": ("💌", "Taklif havolasi"),
     "report": ("📑", "Excel hisobot"),
     "excel": ("📊", "Hisobot fayli"),
+    # --- kategoriyalar ---
+    "category": ("🗂", "Kategoriya"),
+    "info": ("ℹ️", "Kategoriya izohi"),
+    "up": ("⬆️", "Yuqoriga surish"),
+    "down": ("⬇️", "Pastga surish"),
 }
 
 CONTENT_NAMES = {

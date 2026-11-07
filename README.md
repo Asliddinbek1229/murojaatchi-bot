@@ -1,4 +1,4 @@
-# Anonim murojaatlar tizimi (ko'p botli)
+# Murojaat-bot — anonim murojaatlar tizimi (ko'p botli)
 
 Talabalar bo'limlarga **anonim** murojaat yuboradigan Telegram botlar tizimi (aiogram 3 + SQLite).
 
@@ -61,6 +61,26 @@ asosiy bot orqali superadminga xabar boradi.
   botlari tokenlarini qayta kiritishga to'g'ri keladi. Token BotFather'da bekor qilinsa, bot avtomatik to'xtaydi va
   superadminga xabar boradi.
 
+## Murojaat kategoriyalari (ixtiyoriy)
+
+- Superadmin: Asosiy bot → Bo'lim botlari → bot → «Murojaat kategoriyalari» → «Kategoriya qo'shish».
+  Bir nechtasini birdaniga qo'shish mumkin: har birini yangi qatorga yozasiz.
+- Kategoriyani nomlash, tartibini o'zgartirish (yuqoriga/pastga), yashirish va o'chirish mumkin.
+  Murojaatlari bor kategoriya o'chirilsa, eski murojaatlar va hisobotlarda nomi saqlanib qoladi.
+- Har bir kategoriyaga ixtiyoriy **izoh** yozish mumkin (kategoriya kartasi → «Izoh qo'shish»). Talaba shu
+  kategoriyani tanlagach, izoh «Murojaatingizni yozing» xabarida mavzu ostida ko'rinadi. Izohda formatlash
+  va premium emoji ishlaydi. Saqlashdan oldin superadminga talaba ko'radigan ko'rinish yuboriladi.
+- Botda faol kategoriya bo'lsa, talaba «Murojaat yuborish»ni bosgach avval **mavzuni tanlaydi**, keyin yozadi.
+  Kategoriya bo'lmasa, bot avvalgidek ishlaydi.
+- Kategoriya admin kartasida, ro'yxatlarda, talabaning «Mening murojaatlarim» bo'limida va statistikada ko'rinadi.
+- Excel hisobotda alohida **Kategoriyalar** varag'i paydo bo'ladi:
+  - har bir kategoriya bo'yicha: soni, ulushi, holatlar, javob ulushi, o'rtacha reaksiya va javob vaqti;
+  - ikkita diagramma;
+  - kunlar yoki oylar bo'yicha dinamika;
+  - adminlar × kategoriyalar jadvali.
+  
+  «Murojaatlar» varag'iga «Kategoriya» ustuni qo'shiladi.
+
 ## Excel hisobotlar
 
 - **Bo'lim botida** admin «📑 Hisobot» tugmasini bosadi → davrni tanlaydi → bot `.xlsx` faylni yuboradi.
@@ -85,16 +105,21 @@ asosiy bot orqali superadminga xabar boradi.
 
 ## O'rnatish
 
+**Serverga (production, doimiy ishlash):** batafsil qo'llanma — [DEPLOY.md](DEPLOY.md). Qisqasi:
+
+```bash
+sudo cp .env.example .env && sudo nano .env    # BOT_TOKEN, SUPERADMIN_IDS
+sudo bash deploy/install.sh                    # venv, kutubxonalar, systemd xizmati
+sudo bash deploy/update.sh                     # keyingi yangilashlar (avval backup oladi)
+```
+
+**Kompyuterda (ishlab chiqish):**
+
 ```bash
 python -m venv .venv
 .venv\Scripts\activate        # Linux/Mac: source .venv/bin/activate
 pip install -r requirements.txt
 copy .env.example .env         # Linux/Mac: cp .env.example .env
-```
-
-`.env` da `BOT_TOKEN` (asosiy bot) va `SUPERADMIN_IDS` ni to'ldiring, so'ng:
-
-```bash
 python main.py
 ```
 
@@ -117,6 +142,13 @@ bot/handlers/superadmin.py  — asosiy bot: superadmin paneli
 bot/handlers/emoji.py       — asosiy bot: premium emojilar
 bot/handlers/admin.py       — bo'lim boti: admin
 bot/handlers/student.py     — bo'lim boti: talaba
+bot/handlers/report.py      — Excel hisobotlar (bo'lim boti va asosiy bot)
+bot/handlers/system.py      — asosiy bot: /status, /backup
+bot/reports.py              — Excel fayl yasash
+bot/storage.py              — FSM holati SQLite'da (qayta ishga tushganda yo'qolmaydi)
+bot/backup.py, scripts/backup.py — zaxira nusxa olish/tiklash
+bot/logs.py                 — logging (konsol + ixtiyoriy aylanuvchi fayl)
+deploy/                     — systemd xizmati, install.sh, update.sh, uninstall.sh
 ```
 
-FSM holati xotirada (MemoryStorage) — dastur qayta ishga tushsa, yarim yozilgan murojaatlar yo'qoladi.
+FSM holati bazada saqlanadi — dastur qayta ishga tushsa ham yarim yozilgan murojaatlar va javoblar yo'qolmaydi.

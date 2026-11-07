@@ -2,6 +2,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class AppealSG(StatesGroup):
+    category = State()
     content = State()
 
 
@@ -22,6 +23,12 @@ class BotSG(StatesGroup):
     title = State()
     rename = State()
     new_token = State()
+
+
+class CategorySG(StatesGroup):
+    add = State()
+    rename = State()
+    description = State()
 
 
 class BroadcastSG(StatesGroup):

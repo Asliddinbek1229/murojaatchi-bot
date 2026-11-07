@@ -3,8 +3,9 @@
 Varaqlar:
   1. «Umumiy»      — asosiy ko'rsatkichlar, holatlar, dinamika jadvali va diagrammalar
   2. «Bo'limlar»   — (faqat «barcha botlar» hisobotida) har bir bo'lim kesimida
-  3. «Adminlar»    — har bir admin faoliyati
-  4. «Murojaatlar» — har bir murojaat (anonim: talaba haqida hech qanday ma'lumot yo'q)
+  3. «Kategoriyalar» — (kategoriyalar bo'lsa) kategoriya kesimida holatlar, tezlik, dinamika, adminlar
+  4. «Adminlar»    — har bir admin faoliyati
+  5. «Murojaatlar» — har bir murojaat (anonim: talaba haqida hech qanday ma'lumot yo'q)
 """
 import asyncio
 import html
@@ -26,6 +27,8 @@ FMT = "%Y-%m-%d %H:%M:%S"
 MONTHS = ["Yanvar", "Fevral", "Mart", "Aprel", "May", "Iyun", "Iyul", "Avgust",
           "Sentabr", "Oktabr", "Noyabr", "Dekabr"]
 WEEKDAYS = ["Du", "Se", "Ch", "Pa", "Ju", "Sh", "Ya"]
+
+NO_CATEGORY = "Kategoriyasiz"
 
 # davr kodi -> (tugma matni)
 PERIODS = {
@@ -146,6 +149,8 @@ def prepare(data: dict) -> dict:
             "id": a["id"],
             "created": created,
             "bot": a.get("bot_title") or "O'chirilgan bot",
+            "category": a.get("category_title") or (NO_CATEGORY if a.get("category_id") is None else "O'chirilgan kategoriya"),
+            "admin_id": answers[0]["sender_id"] if answers else None,
             "status": a["status"],
             "admin": a.get("admin_name") or "",
             "text": "\n".join(_msg_line(m) for m in student),
@@ -156,7 +161,9 @@ def prepare(data: dict) -> dict:
             "answer_h": _hours(created, first_answer),
             "has_answer": bool(answers),
         })
-    return {"rows": rows, "admins": admins}
+    cats = data.get("categories") or []
+    has_cats = bool(cats) or any(r["category"] != NO_CATEGORY for r in rows)
+    return {"rows": rows, "admins": admins, "categories": cats, "has_categories": has_cats}
 
 
 # ---------------- uslublar ----------------
@@ -228,8 +235,37 @@ def _avg(values: list) -> float | None:
     return round(sum(vals) / len(vals), 1) if vals else None
 
 
+def _num(v: float | None):
+    """0.0 ham son sifatida ko'rinsin; faqat qiymat yo'q bo'lsa «—»."""
+    return "—" if v is None else v
+
+
 def _pct(n: int, total: int) -> str:
     return f"{n / total * 100:.0f}%" if total else "—"
+
+
+def _buckets(start: datetime, end: datetime, group: str) -> list[tuple[str, datetime, datetime]]:
+    out = []
+    if group == "day":
+        d = start
+        while d < end:
+            out.append((f"{d.strftime('%d.%m')} ({WEEKDAYS[d.weekday()]})", d, d + timedelta(days=1)))
+            d += timedelta(days=1)
+    else:
+        for m in range(1, 13):
+            s = start.replace(month=m)
+            e = s.replace(month=m + 1) if m < 12 else s.replace(year=s.year + 1, month=1)
+            out.append((MONTHS[m - 1], s, e))
+    return out
+
+
+def _top_category(rows: list) -> tuple[str, int] | None:
+    """Eng ko'p murojaat kelgan kategoriya («Kategoriyasiz» hisobga olinmaydi)."""
+    counts: dict[str, int] = {}
+    for x in rows:
+        if x["category"] != NO_CATEGORY:
+            counts[x["category"]] = counts.get(x["category"], 0) + 1
+    return max(counts.items(), key=lambda kv: kv[1]) if counts else None
 
 
 # ---------------- varaqlar ----------------
@@ -257,6 +293,10 @@ def _sheet_summary(ws, title: str, sub: list[str], rep: dict, start: datetime, e
         ["Eng tez javob (soat)", min(ans) if ans else "—", ""],
         ["Eng uzoq javob (soat)", max(ans) if ans else "—", ""],
     ]
+    top = _top_category(rows) if rep["has_categories"] else None
+    if top:
+        top_name, top_n = top
+        kpi.append(["Eng ko'p murojaat kelgan kategoriya", top_name, _pct(top_n, total)])
     kpi_start = r
     r = _table(ws, r, ["Ko'rsatkich", "Qiymat", "Ulushi"], kpi, aligns=[LEFT, CENTER, CENTER])
     for i in range(kpi_start + 1, kpi_start + 1 + len(kpi)):
@@ -282,17 +322,7 @@ def _sheet_summary(ws, title: str, sub: list[str], rep: dict, start: datetime, e
 
     # --- dinamika ---
     r = _section(ws, r, "Kunlar bo'yicha dinamika" if group == "day" else "Oylar bo'yicha dinamika", 3)
-    buckets: list[tuple[str, datetime, datetime]] = []
-    if group == "day":
-        d = start
-        while d < end:
-            buckets.append((f"{d.strftime('%d.%m')} ({WEEKDAYS[d.weekday()]})", d, d + timedelta(days=1)))
-            d += timedelta(days=1)
-    else:
-        for m in range(1, 13):
-            s = start.replace(month=m)
-            e = s.replace(month=m + 1) if m < 12 else s.replace(year=s.year + 1, month=1)
-            buckets.append((MONTHS[m - 1], s, e))
+    buckets = _buckets(start, end, group)
     dyn = []
     for label, s, e in buckets:
         part = [x for x in rows if x["created"] and s <= x["created"] < e]
@@ -322,7 +352,7 @@ def _sheet_bots(ws, title: str, sub: list[str], rep: dict):
         data.append([
             name, len(items), c["new"], c["in_progress"], c["answered"], c["closed"], c["rejected"],
             _pct(sum(1 for x in items if x["has_answer"]), len(items)),
-            _avg([x["answer_h"] for x in items]) or "—",
+            _num(_avg([x["answer_h"] for x in items])),
         ])
     widths = (28, 10, 10, 14, 14, 12, 12, 14, 16)
     for i, w in enumerate(widths, start=1):
@@ -335,12 +365,139 @@ def _sheet_bots(ws, title: str, sub: list[str], rep: dict):
     ws.sheet_view.showGridLines = False
 
 
+def _cat_groups(rep: dict, all_bots: bool) -> list[tuple[tuple[str, str], list]]:
+    """(bo'lim, kategoriya) -> murojaatlar. Davrda murojaati bo'lmagan kategoriyalar ham (bo'sh ro'yxat bilan)."""
+    groups: dict[tuple[str, str], list] = {}
+    for c in rep["categories"]:
+        groups.setdefault((c["bot_title"] if all_bots else "", c["title"]), [])
+    for x in rep["rows"]:
+        groups.setdefault((x["bot"] if all_bots else "", x["category"]), []).append(x)
+    order = list(groups)
+    # tartib: bo'lim, so'ng murojaatlar soni (ko'pdan kamga); «Kategoriyasiz» — oxirida
+    return sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1] == NO_CATEGORY, -len(kv[1]), order.index(kv[0])))
+
+
+def _sheet_categories(ws, title: str, sub: list[str], rep: dict, start: datetime, end: datetime,
+                      group: str, all_bots: bool):
+    rows = rep["rows"]
+    total = len(rows)
+    groups = _cat_groups(rep, all_bots)
+    lead = ["Bo'lim", "Kategoriya"] if all_bots else ["Kategoriya"]
+    lead_n = len(lead)
+    heads = lead + ["Jami", "Ulushi", "Yangi", "Qabul qilingan", "Javob berilgan", "Yopilgan", "Rad etilgan",
+                    "Javob ulushi", "O'rtacha reaksiya (soat)", "O'rtacha javob (soat)"]
+    widths = ([22] if all_bots else []) + [30, 9, 9, 9, 12, 12, 11, 11, 11, 13, 14]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    r = _title(ws, title, sub, len(heads))
+    key = (lambda x: (x["bot"] if all_bots else "", x["category"]))
+    label = (lambda k: f"{k[0]}: {k[1]}") if all_bots else (lambda k: k[1])
+
+    # --- 1. kategoriyalar jadvali ---
+    r = _section(ws, r, "Kategoriyalar kesimida", len(heads))
+    data = []
+    for (bot, cat), items in groups:
+        c = {st: sum(1 for x in items if x["status"] == st) for st in STATUSES}
+        n = len(items)
+        data.append(([bot] if all_bots else []) + [
+            cat, n, _pct(n, total), c["new"], c["in_progress"], c["answered"], c["closed"], c["rejected"],
+            _pct(sum(1 for x in items if x["has_answer"]), n),
+            _num(_avg([x["react_h"] for x in items])),
+            _num(_avg([x["answer_h"] for x in items])),
+        ])
+    st_all = {st: sum(1 for x in rows if x["status"] == st) for st in STATUSES}
+    data.append(([""] if all_bots else []) + [
+        "JAMI", total, "100%" if total else "—", st_all["new"], st_all["in_progress"], st_all["answered"],
+        st_all["closed"], st_all["rejected"], _pct(sum(1 for x in rows if x["has_answer"]), total),
+        _num(_avg([x["react_h"] for x in rows])), _num(_avg([x["answer_h"] for x in rows])),
+    ])
+    head = r
+    r = _table(ws, r, heads, data, aligns=[LEFT] * lead_n + [CENTER] * (len(heads) - lead_n))
+    for j in range(1, len(heads) + 1):  # jami qatori
+        c = ws.cell(row=r - 1, column=j)
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = _fill(NAVY)
+    for j, st in enumerate(STATUSES):  # holat ustunlari sarlavhasi — holat rangida
+        c = ws.cell(row=head, column=lead_n + 3 + j)
+        c.fill = _fill(STATUS_FILL[st])
+        c.font = Font(bold=True, color=NAVY)
+    ws.freeze_panes = ws.cell(row=head + 1, column=lead_n + 1)
+    r += 1
+
+    n_cats = len(groups)
+    if total and n_cats:
+        bar = BarChart()
+        bar.type = "bar"
+        bar.title = "Kategoriyalar bo'yicha murojaatlar"
+        bar.add_data(Reference(ws, min_col=lead_n + 1, min_row=head, max_row=head + n_cats), titles_from_data=True)
+        bar.set_categories(Reference(ws, min_col=lead_n, min_row=head + 1, max_row=head + n_cats))
+        bar.legend = None
+        bar.height, bar.width = max(7.0, 0.7 * n_cats + 3), 16
+        ws.add_chart(bar, f"A{r}")
+        pie = PieChart()
+        pie.title = "Kategoriyalar ulushi"
+        pie.add_data(Reference(ws, min_col=lead_n + 1, min_row=head, max_row=head + n_cats), titles_from_data=True)
+        pie.set_categories(Reference(ws, min_col=lead_n, min_row=head + 1, max_row=head + n_cats))
+        pie.dataLabels = DataLabelList()
+        pie.dataLabels.showPercent = True
+        pie.height, pie.width = bar.height, 12
+        ws.add_chart(pie, f"{get_column_letter(lead_n + 5)}{r}")
+        r += int(bar.height * 2) + 3  # diagramma egallagan qatorlar (~0.5 sm qator)
+
+    # --- 2. dinamika (davr × kategoriya) ---
+    active = [k for k, items in groups if items]
+    top = active[:12]  # ko'pi bilan 12 ta ustun, qolganlari — «Boshqalar»
+    other = len(active) > len(top)
+    if total and top:
+        r = _section(ws, r, ("Kunlar" if group == "day" else "Oylar") + " bo'yicha kategoriyalar dinamikasi",
+                     len(heads))
+        dheads = ["Sana" if group == "day" else "Oy"] + [label(k) for k in top] + (["Boshqalar"] if other else []) + ["Jami"]
+        ddata = []
+        for lab, s, e in _buckets(start, end, group):
+            part = [x for x in rows if x["created"] and s <= x["created"] < e]
+            vals = [sum(1 for x in part if key(x) == k) for k in top]
+            if other:
+                vals.append(len(part) - sum(vals))
+            ddata.append([lab] + vals + [len(part)])
+        dhead = r
+        r = _table(ws, r, dheads, ddata, aligns=[LEFT] + [CENTER] * (len(dheads) - 1))
+        chart = BarChart()
+        chart.type = "col"
+        chart.grouping = "stacked"
+        chart.overlap = 100
+        chart.title = "Kategoriyalar dinamikasi"
+        chart.y_axis.title = "Soni"
+        chart.add_data(Reference(ws, min_col=2, max_col=len(dheads) - 1, min_row=dhead, max_row=dhead + len(ddata)),
+                       titles_from_data=True)
+        chart.set_categories(Reference(ws, min_col=1, min_row=dhead + 1, max_row=dhead + len(ddata)))
+        chart.height, chart.width = 9, 24
+        ws.add_chart(chart, f"A{r + 1}")
+        r += 22
+
+    # --- 3. adminlar × kategoriyalar ---
+    answered = [x for x in rows if x["admin_id"]]
+    if answered and top:
+        names = {uid: info["name"] for uid, info in rep["admins"].items()}
+        r = _section(ws, r, "Adminlar javob bergan murojaatlar — kategoriyalar kesimida", len(heads))
+        aheads = ["Admin"] + [label(k) for k in top] + (["Boshqalar"] if other else []) + ["Jami"]
+        adata = []
+        uids = sorted({x["admin_id"] for x in answered}, key=lambda u: -sum(1 for x in answered if x["admin_id"] == u))
+        for uid in uids:
+            mine = [x for x in answered if x["admin_id"] == uid]
+            vals = [sum(1 for x in mine if key(x) == k) for k in top]
+            if other:
+                vals.append(len(mine) - sum(vals))
+            adata.append([names.get(uid, str(uid))] + vals + [len(mine)])
+        _table(ws, r, aheads, adata, aligns=[LEFT] + [CENTER] * (len(aheads) - 1))
+    ws.sheet_view.showGridLines = False
+
+
 def _sheet_admins(ws, title: str, sub: list[str], rep: dict):
     data = []
     for info in sorted(rep["admins"].values(), key=lambda a: -len(a["answered"])):
         data.append([
             info["name"], info["accepted"], len(info["answered"]), info["replies"],
-            info["closed"], info["rejected"], _avg(info["answer_hours"]) or "—",
+            info["closed"], info["rejected"], _num(_avg(info["answer_hours"])),
         ])
     widths = (30, 14, 16, 14, 12, 12, 18)
     for i, w in enumerate(widths, start=1):
@@ -359,6 +516,10 @@ def _sheet_appeals(ws, title: str, sub: list[str], rep: dict, with_bot: bool):
     heads = ["№", "Sana", "Holati", "Mas'ul admin", "Murojaat matni", "Tarkibi", "Javob", "Rad etish sababi",
              "Reaksiya (soat)", "Javob muddati (soat)"]
     widths = [8, 17, 17, 22, 60, 18, 50, 28, 12, 14]
+    with_cat = rep["has_categories"]
+    if with_cat:
+        heads.insert(2, "Kategoriya")
+        widths.insert(2, 22)
     if with_bot:
         heads.insert(2, "Bo'lim")
         widths.insert(2, 20)
@@ -374,18 +535,22 @@ def _sheet_appeals(ws, title: str, sub: list[str], rep: dict, with_bot: bool):
             x["react_h"] if x["react_h"] is not None else "—",
             x["answer_h"] if x["answer_h"] is not None else "—",
         ]
+        if with_cat:
+            row.insert(2, x["category"])
         if with_bot:
             row.insert(2, x["bot"])
         data.append(row)
         statuses.append(x["status"])
     aligns = [CENTER, CENTER, CENTER, LEFT, LEFT, LEFT, LEFT, LEFT, CENTER, CENTER]
+    if with_cat:
+        aligns.insert(2, LEFT)
     if with_bot:
         aligns.insert(2, LEFT)
     head_row = r
     if not data:
         ws.cell(row=r, column=1, value="Bu davrda murojaatlar bo'lmagan.").font = Font(italic=True, color="808080")
     else:
-        _table(ws, r, heads, data, aligns=aligns, status_col=3 if with_bot else 2, statuses=statuses)
+        _table(ws, r, heads, data, aligns=aligns, status_col=2 + int(with_bot) + int(with_cat), statuses=statuses)
         ws.auto_filter.ref = f"A{head_row}:{get_column_letter(len(heads))}{head_row + len(data)}"
         ws.freeze_panes = ws.cell(row=head_row + 1, column=3)
     ws.sheet_view.showGridLines = False
@@ -405,6 +570,9 @@ def build_xlsx(data: dict, scope_name: str, period_name: str, start: datetime, e
     _sheet_summary(ws, f"Murojaatlar hisoboti · {period_name}", sub, rep, start, end, group)
     if all_bots:
         _sheet_bots(wb.create_sheet("Bo'limlar"), "Bo'limlar kesimida", sub, rep)
+    if rep["has_categories"]:
+        _sheet_categories(wb.create_sheet("Kategoriyalar"), "Kategoriyalar bo'yicha statistika", sub, rep,
+                          start, end, group, all_bots)
     _sheet_admins(wb.create_sheet("Adminlar"), "Adminlar faoliyati", sub, rep)
     _sheet_appeals(wb.create_sheet("Murojaatlar"), "Murojaatlar ro'yxati", sub, rep, all_bots)
     for sheet in wb.worksheets:
@@ -412,7 +580,7 @@ def build_xlsx(data: dict, scope_name: str, period_name: str, start: datetime, e
         sheet.page_setup.fitToWidth = 1
         sheet.sheet_properties.pageSetUpPr.fitToPage = True
     wb.properties.title = f"Murojaatlar hisoboti — {scope_name}"
-    wb.properties.creator = "Murojaatlar tizimi"
+    wb.properties.creator = "Murojaat-bot"
     buf = io.BytesIO()
     wb.save(buf)
 
@@ -423,6 +591,7 @@ def build_xlsx(data: dict, scope_name: str, period_name: str, start: datetime, e
         "open": sum(1 for x in rows if x["status"] in ("new", "in_progress")),
         "rejected": sum(1 for x in rows if x["status"] == "rejected"),
         "avg_answer": _avg([x["answer_h"] for x in rows]),
+        "top_category": _top_category(rows) if rep["has_categories"] else None,
     }
     return buf.getvalue(), summary
 

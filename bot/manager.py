@@ -5,6 +5,8 @@ yangilanish uzatadi. Bot qo'shish/to'xtatish dastur ishlab turganda bajariladi.
 """
 import asyncio
 import logging
+import time
+import traceback
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -50,6 +52,8 @@ class BotManager:
         self.tasks: dict[int, asyncio.Task] = {}
         self._main_task: asyncio.Task | None = None
         self.main_username: str = ""
+        self._inflight: set[asyncio.Task] = set()   # qayta ishlanayotgan update'lar (to'xtashda kutiladi)
+        self._err_last: dict[str, float] = {}       # xato turi -> oxirgi xabar vaqti (spamga qarshi)
 
     # ---------- kontekst ----------
     def record_for(self, bot: Bot) -> dict | None:
@@ -167,6 +171,16 @@ class BotManager:
     async def shutdown(self):
         """To'g'ri to'xtatish: har bir bo'lim boti va asosiy bot superadminga xabar beradi."""
         count = len(self.tasks)
+        # 1) yangi update olishni to'xtatamiz (sessiyalar hali ochiq)
+        polls = [t for t in [self._main_task, *self.tasks.values()] if t]
+        for t in polls:
+            t.cancel()
+        await asyncio.gather(*polls, return_exceptions=True)
+        # 2) boshlangan ishlarni (javob yuborish, saqlash) tugatib olamiz
+        if self._inflight:
+            log.info("%d ta boshlangan ish tugashi kutilmoqda...", len(self._inflight))
+            await asyncio.wait(list(self._inflight), timeout=15)
+        # 3) har bir bot o'zi orqali «to'xtadi» deb xabar beradi
         await asyncio.gather(*(self.stop(bid, reason="tizim to'xtatildi") for bid in list(self.tasks)))
         if self._main_task:
             self._main_task.cancel()
@@ -187,9 +201,11 @@ class BotManager:
         allowed = self.dp.resolve_used_update_types()
         offset = None
         name = "asosiy" if bot_id is None else f"#{bot_id}"
+        delay = 1
         while True:
             try:
                 updates = await bot.get_updates(offset=offset, timeout=25, allowed_updates=allowed)
+                delay = 1
             except asyncio.CancelledError:
                 raise
             except TelegramUnauthorizedError as ex:
@@ -201,19 +217,42 @@ class BotManager:
                 log.warning("Bot %s boshqa joyda ham ishlayapti (conflict), 5 s kutamiz", name)
                 await asyncio.sleep(5)
                 continue
-            except Exception as ex:
-                log.warning("Bot %s polling xatosi: %s", name, ex)
-                await asyncio.sleep(3)
+            except Exception as ex:  # internet uzilishi, Telegram 5xx — kutib qayta urinamiz
+                log.warning("Bot %s polling xatosi: %s (%d s dan keyin qayta)", name, ex, delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 60)
                 continue
             for upd in updates:
                 offset = upd.update_id + 1
-                asyncio.create_task(self._feed(bot, upd))
+                task = asyncio.create_task(self._feed(bot, upd))
+                self._inflight.add(task)
+                task.add_done_callback(self._inflight.discard)
 
     async def _feed(self, bot: Bot, upd):
         try:
             await self.dp.feed_update(bot, upd)
-        except Exception:
+        except Exception as ex:
             log.exception("Update qayta ishlashda xato")
+            await self._report_error(bot, ex)
+
+    async def _report_error(self, bot: Bot, ex: Exception):
+        """Kutilmagan xato haqida superadminga qisqa xabar (bir xil xato 10 daqiqada 1 marta)."""
+        key = f"{type(ex).__name__}:{str(ex)[:80]}"
+        t = time.monotonic()
+        if t - self._err_last.get(key, -1e9) < 600:
+            return
+        self._err_last[key] = t
+        rec = self.by_tg.get(bot.id)
+        where = f"@{rec['username']}" if rec else f"@{self.main_username} (asosiy)"
+        tb = "".join(traceback.format_exception(type(ex), ex, ex.__traceback__)[-3:])[-1500:]
+        try:
+            await self._notify_via(self.main_bot, R(
+                f"[[warn]] <b>Botda xato</b> · {esc(where)} · {now()[:16]}\n"
+                f"<blockquote expandable><code>{esc(tb)}</code></blockquote>\n"
+                "Foydalanuvchi amali bajarilmagan bo'lishi mumkin. Batafsil: server loglari."
+            ))
+        except Exception:
+            pass
 
     async def _on_token_revoked(self, bot_id: int, error: str):
         rec = await self.db.get_bot(bot_id)

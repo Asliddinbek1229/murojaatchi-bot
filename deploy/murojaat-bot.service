@@ -1,0 +1,35 @@
+# systemd xizmati — deploy/install.sh avtomatik o'rnatadi (@APP_DIR@, @USER@, @GROUP@ almashtiriladi).
+
+[Unit]
+Description=Murojaat-bot — anonim murojaatlar Telegram botlari (asosiy + bo'lim botlari)
+Wants=network-online.target
+After=network-online.target
+# cheksiz qayta urinish (masalan, server yonganda internet hali yo'q bo'lsa)
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@APP_DIR@
+ExecStart=@APP_DIR@/.venv/bin/python -u main.py
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# Yiqilsa yoki server qayta yonsa — avtomatik qayta ishga tushadi
+Restart=always
+RestartSec=5
+
+# To'g'ri to'xtatish: SIGTERM -> boshlangan ishlar tugaydi, superadminga «to'xtadi» xabari ketadi
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+# Xavfsizlik
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+@PROTECT_HOME@
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

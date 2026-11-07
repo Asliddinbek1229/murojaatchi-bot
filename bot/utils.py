@@ -72,7 +72,7 @@ def items_summary(items: list[dict]) -> str:
 def _ack_text(items: list[dict], mode: str) -> str:
     n, left = len(items), MAX_ITEMS - len(items)
     what = "Murojaatingizda" if mode == "student" else "Javobingizda"
-    target = "dekanatga" if mode == "student" else "talabaga"
+    target = "bo'limga" if mode == "student" else "talabaga"
     name = "Murojaat" if mode == "student" else "Javob"
     more = (
         f"[[add]] Yana matn, rasm, video, ovozli xabar yoki fayl qo'shishingiz mumkin (yana <b>{left} ta</b>)."
@@ -164,6 +164,7 @@ def appeal_header(appeal: dict) -> str:
     where = appeal.get("bot_title") or "O'chirilgan bot"
     lines = [
         f"{e('robot')} Bo'lim: <b>{esc(where)}</b>",
+        *([f"{e('category')} Mavzu: <b>{esc(appeal['category_title'])}</b>"] if appeal.get("category_title") else []),
         f"{e('clock')} Vaqt: {tg_time(appeal['created_at'])}",
         f"Holati: <b>{status_label(appeal['status'])}</b>",
     ]

@@ -38,6 +38,10 @@ PERIOD_HELP = (
 def _caption(scope: str, period_text: str, s: dict) -> str:
     pct = f" ({s['answered'] / s['total'] * 100:.0f}%)" if s["total"] else ""
     avg = f"{s['avg_answer']} soat" if s["avg_answer"] is not None else "—"
+    top = ""
+    if s.get("top_category"):
+        name, n = s["top_category"]
+        top = f"\n[[category]] Eng ko'p: <b>{esc(name)}</b> ({n} ta) — batafsil «Kategoriyalar» varag'ida"
     return R(
         f"[[excel]] <b>{esc(scope)}</b>\n"
         f"<blockquote>[[calendar]] {esc(period_text)}\n"
@@ -45,7 +49,7 @@ def _caption(scope: str, period_text: str, s: dict) -> str:
         f"[[st_answered]] Javob olgan: <b>{s['answered']}</b>{pct}\n"
         f"[[st_progress]] Javob kutmoqda: <b>{s['open']}</b>\n"
         f"[[st_rejected]] Rad etilgan: <b>{s['rejected']}</b>\n"
-        f"[[clock]] O'rtacha javob muddati: <b>{avg}</b></blockquote>"
+        f"[[clock]] O'rtacha javob muddati: <b>{avg}</b>{top}</blockquote>"
     )
 
 

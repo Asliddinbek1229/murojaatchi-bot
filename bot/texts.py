@@ -1,5 +1,6 @@
 """Talabaga ko'rsatiladigan uzun matnlar. [[kalit]] — emoji (premium bo'lishi mumkin)."""
 import html
+import re
 
 from bot.ui import R
 from bot.utils import MAX_ITEMS
@@ -48,9 +49,31 @@ def student_help() -> str:
     )
 
 
-def content_prompt() -> str:
+def category_prompt() -> str:
     return R(
-        "[[write]] <b>Murojaatingizni yozing</b>\n\n"
+        "[[category]] <b>Murojaat mavzusini tanlang</b>\n\n"
+        "<blockquote>Murojaatingiz qaysi masala bo'yicha? Pastdagi ro'yxatdan mosini tanlang — "
+        "shunda u tegishli xodimga tezroq yetib boradi.</blockquote>\n"
+        "[[tip]] Tanlaganingizdan keyin murojaat matnini yozasiz. Aniq mos mavzu bo'lmasa, eng yaqinini tanlang."
+    )
+
+
+_DESC = "\x00DESC\x00"
+_BQ = re.compile(r"</?blockquote[^>]*>")
+
+
+def category_description(description: str) -> str:
+    """Superadmin yozgan izoh (HTML) — talabaga ko'rsatish uchun; ichma-ich blockquote Telegram'da taqiqlangan."""
+    return _BQ.sub("", description).strip()
+
+
+def content_prompt(category: str | None = None, description: str | None = None) -> str:
+    cat = ""
+    if category:
+        cat = f"[[category]] Mavzu: <b>{html.escape(category)}</b>\n"
+        cat += f"<blockquote>[[info]] {_DESC}</blockquote>\n\n" if description else "\n"
+    text = R(
+        "[[write]] <b>Murojaatingizni yozing</b>\n\n" + cat +
         "<blockquote><b>Qanday yuboriladi?</b>\n"
         "[[one]] Muammo, taklif yoki savolingizni <b>matn</b> qilib yozing.\n"
         "[[two]] Kerak bo'lsa <b>rasm, video, ovozli xabar yoki fayl</b> qo'shing. "
@@ -67,12 +90,15 @@ def content_prompt() -> str:
         "[[lock]] Murojaat <b>anonim</b> yuboriladi.\n"
         "[[cancel]] Fikringizdan qaytsangiz — <b>«Bekor qilish»</b>."
     )
+    # izoh R() dan keyin qo'yiladi: superadmin matnidagi belgilar emoji-kalit deb talqin qilinmasin
+    return text.replace(_DESC, category_description(description)) if description else text
 
 
-def appeal_sent(appeal_id: int) -> str:
+def appeal_sent(appeal_id: int, category: str | None = None) -> str:
+    cat = f"[[category]] Mavzu: <b>{html.escape(category)}</b>\n" if category else ""
     return R(
         "[[party]] <b>Murojaatingiz yuborildi!</b>\n\n"
-        f"[[number]] Raqami: <b>#{appeal_id}</b>\n\n"
+        f"[[number]] Raqami: <b>#{appeal_id}</b>\n{cat}\n"
         "<blockquote>[[rocket]] <b>Endi nima bo'ladi?</b>\n"
         "• Murojaat tegishli xodimlarga anonim tarzda yetkazildi.\n"
         "• Xodim uni qabul qilganda va javob berganda shu botga xabar keladi.\n"
@@ -85,7 +111,7 @@ def main_welcome() -> str:
     """Asosiy bot oddiy foydalanuvchilar uchun — faqat qisqa ma'lumot."""
     return R(
         "[[wave]] <b>Assalomu alaykum!</b>\n\n"
-        "<blockquote>[[robot]] Bu — talabalar murojaatlari tizimining <b>boshqaruv boti</b>. "
+        "<blockquote>[[robot]] Bu — <b>Murojaat-bot</b> tizimining <b>boshqaruv boti</b>. "
         "U faqat tizim ma'murlari uchun mo'ljallangan.</blockquote>\n\n"
         "[[lock]] Murojaatlar tegishli bo'limlarning alohida botlari orqali <b>anonim</b> tarzda qabul qilinadi."
     )

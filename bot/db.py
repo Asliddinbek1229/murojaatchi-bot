@@ -81,6 +81,18 @@ CREATE TABLE IF NOT EXISTS appeal_cards (
     PRIMARY KEY (appeal_id, chat_id, message_id)
 );
 
+-- Murojaat kategoriyalari (har bir bo'lim boti uchun alohida; bo'lmasa — kategoriyasiz ishlaydi)
+CREATE TABLE IF NOT EXISTS categories (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    bot_id      INTEGER NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+    title       TEXT NOT NULL,
+    position    INTEGER NOT NULL DEFAULT 0,
+    is_active   INTEGER NOT NULL DEFAULT 1,   -- 0 = talabalarga ko'rinmaydi
+    is_deleted  INTEGER NOT NULL DEFAULT 0,   -- o'chirilgan, lekin eski murojaatlar/hisobot uchun saqlanadi
+    description TEXT,                         -- ixtiyoriy izoh (HTML): kategoriya tanlangach talabaga ko'rsatiladi
+    created_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS custom_emojis (
     key       TEXT PRIMARY KEY,
     emoji_id  TEXT NOT NULL,
@@ -98,6 +110,8 @@ CREATE INDEX IF NOT EXISTS idx_appeals_status ON appeals(status);
 CREATE INDEX IF NOT EXISTS idx_appeals_user ON appeals(user_id);
 CREATE INDEX IF NOT EXISTS idx_appeals_bot ON appeals(bot_id);
 CREATE INDEX IF NOT EXISTS idx_msgs_appeal ON appeal_messages(appeal_id);
+CREATE INDEX IF NOT EXISTS idx_appeals_category ON appeals(category_id);
+CREATE INDEX IF NOT EXISTS idx_categories_bot ON categories(bot_id);
 """
 
 # holat -> (emoji kaliti, nomi)
@@ -113,10 +127,11 @@ STATUSES = {
 OPEN_STATUSES = ["new", "in_progress"]  # «Ochiq murojaatlar» — hali javob berilmaganlar
 
 _APPEAL_SELECT = """SELECT ap.*, b.title AS bot_title, b.username AS bot_username,
-                           ad.full_name AS admin_name
+                           ad.full_name AS admin_name, c.title AS category_title
                     FROM appeals ap
                     LEFT JOIN bots b ON b.id = ap.bot_id
-                    LEFT JOIN users ad ON ad.user_id = ap.admin_id"""
+                    LEFT JOIN users ad ON ad.user_id = ap.admin_id
+                    LEFT JOIN categories c ON c.id = ap.category_id"""
 
 
 def now() -> str:
@@ -148,6 +163,58 @@ class Database:
             await self.conn.execute("ALTER TABLE appeals ADD COLUMN bot_id INTEGER")
         if "reject_reason" not in cols:
             await self.conn.execute("ALTER TABLE appeals ADD COLUMN reject_reason TEXT")
+        if "category_id" not in cols:
+            await self.conn.execute("ALTER TABLE appeals ADD COLUMN category_id INTEGER")
+        await self._migrate_legacy_categories()
+
+    async def _migrate_legacy_categories(self):
+        """Eng birinchi (bitta botli) versiyadagi `categories(id, name, is_active)` jadvalini yangi tuzilishga o'tkazadi.
+
+        Eski jadval `categories_legacy` nomi bilan saqlab qo'yiladi. Murojaatlarda ishlatilgan eski kategoriyalar
+        murojaat tegishli bo'lgan botga «o'chirilgan» (faqat tarix uchun) kategoriya sifatida ko'chiriladi —
+        talabalarga ko'rinmaydi, lekin eski murojaatlar va hisobotlarda nomi qoladi.
+        Boti noma'lum eski murojaatlarning kategoriyasi bo'shatiladi.
+        """
+        cols = {r["name"] for r in await self._all("PRAGMA table_info(categories)")}
+        if "bot_id" in cols and "description" not in cols:  # izoh ustuni keyinroq qo'shilgan
+            await self.conn.execute("ALTER TABLE categories ADD COLUMN description TEXT")
+        if not cols or "bot_id" in cols:
+            return
+        name_col = "name" if "name" in cols else ("title" if "title" in cols else None)
+        old = {r["id"]: r for r in await self._all("SELECT * FROM categories")}
+        legacy = "categories_legacy"
+        n = 1
+        while await self._scalar("SELECT count(*) FROM sqlite_master WHERE name=?", (legacy,)):
+            n += 1
+            legacy = f"categories_legacy{n}"
+        await self.conn.execute(f"ALTER TABLE categories RENAME TO {legacy}")
+        await self.conn.executescript(SCHEMA)  # yangi `categories` jadvali yaratiladi
+        used = await self._all(
+            "SELECT DISTINCT bot_id, category_id FROM appeals WHERE category_id IS NOT NULL"
+        )
+        mapping: dict[tuple[int, int], int] = {}
+        for u in used:
+            bot_id, old_id = u["bot_id"], u["category_id"]
+            exists = bot_id is not None and await self._scalar("SELECT count(*) FROM bots WHERE id=?", (bot_id,))
+            if not exists or old_id not in old:
+                await self.conn.execute(
+                    "UPDATE appeals SET category_id=NULL WHERE category_id=? AND bot_id IS ?", (old_id, bot_id)
+                )
+                continue
+            title = (old[old_id].get(name_col) if name_col else None) or f"Kategoriya #{old_id}"
+            cur = await self.conn.execute(
+                "INSERT INTO categories(bot_id, title, position, is_active, is_deleted, created_at) "
+                "VALUES (?,?,?,0,1,?)",
+                (bot_id, str(title)[:64], old_id, now()),
+            )
+            mapping[(bot_id, old_id)] = cur.lastrowid
+        # eski va yangi ID'lar to'qnashmasligi uchun avval manfiy qiymat bilan belgilab, keyin qaytaramiz
+        for (bot_id, old_id), new_id in mapping.items():
+            await self.conn.execute(
+                "UPDATE appeals SET category_id=? WHERE category_id=? AND bot_id=?", (-new_id, old_id, bot_id)
+            )
+        await self.conn.execute("UPDATE appeals SET category_id=-category_id WHERE category_id < 0")
+        # eski indeks yangi jadvalga mos (appeals.category_id) — qoladi; INDEXES qolganini yaratadi
 
     async def close(self):
         if self.conn:
@@ -238,7 +305,9 @@ class Database:
                     (SELECT count(*) FROM bot_admins a WHERE a.bot_id=b.id) AS admins,
                     (SELECT count(*) FROM appeals ap WHERE ap.bot_id=b.id) AS appeals,
                     (SELECT count(*) FROM appeals ap WHERE ap.bot_id=b.id
-                        AND ap.status IN ('new','in_progress')) AS open_appeals
+                        AND ap.status IN ('new','in_progress')) AS open_appeals,
+                    (SELECT count(*) FROM categories c WHERE c.bot_id=b.id AND c.is_deleted=0
+                        AND c.is_active=1) AS categories
                  FROM bots b"""
         if only_active:
             sql += " WHERE b.is_active=1"
@@ -315,13 +384,95 @@ class Database:
         )
 
     # ---------- appeals ----------
-    async def create_appeal(self, bot_id: int, user_id: int) -> int:
+    async def create_appeal(self, bot_id: int, user_id: int, category_id: int | None = None) -> int:
         t = now()
         cur = await self._exec(
-            "INSERT INTO appeals(bot_id, user_id, status, created_at, updated_at) VALUES (?,?,?,?,?)",
-            (bot_id, user_id, "new", t, t),
+            "INSERT INTO appeals(bot_id, user_id, status, created_at, updated_at, category_id) VALUES (?,?,?,?,?,?)",
+            (bot_id, user_id, "new", t, t, category_id),
         )
         return cur.lastrowid
+
+    # ---------- kategoriyalar ----------
+    async def categories(self, bot_id: int, only_active=False) -> list[dict]:
+        sql = """SELECT c.*,
+                    (SELECT count(*) FROM appeals ap WHERE ap.category_id=c.id) AS appeals,
+                    (SELECT count(*) FROM appeals ap WHERE ap.category_id=c.id
+                        AND ap.status IN ('new','in_progress')) AS open_appeals
+                 FROM categories c WHERE c.bot_id=? AND c.is_deleted=0"""
+        if only_active:
+            sql += " AND c.is_active=1"
+        return await self._all(sql + " ORDER BY c.position, c.id", (bot_id,))
+
+    async def get_category(self, cat_id: int):
+        return await self._one(
+            """SELECT c.*, (SELECT count(*) FROM appeals ap WHERE ap.category_id=c.id) AS appeals,
+                      (SELECT count(*) FROM appeals ap WHERE ap.category_id=c.id
+                          AND ap.status IN ('new','in_progress')) AS open_appeals
+               FROM categories c WHERE c.id=? AND c.is_deleted=0""",
+            (cat_id,),
+        )
+
+    async def add_categories(self, bot_id: int, titles: list[str]) -> list[str]:
+        """Bir nechta kategoriyani qo'shadi; mavjudlari (nomi bir xil) takrorlanmaydi. Qo'shilganlarini qaytaradi."""
+        existing = {c["title"].casefold() for c in await self.categories(bot_id)}
+        pos = await self._scalar("SELECT coalesce(max(position), 0) FROM categories WHERE bot_id=?", (bot_id,))
+        added = []
+        for t in titles:
+            if t.casefold() in existing:
+                continue
+            pos += 1
+            await self.conn.execute(
+                "INSERT INTO categories(bot_id, title, position, created_at) VALUES (?,?,?,?)", (bot_id, t, pos, now())
+            )
+            existing.add(t.casefold())
+            added.append(t)
+        await self.conn.commit()
+        return added
+
+    async def rename_category(self, cat_id: int, title: str):
+        await self._exec("UPDATE categories SET title=? WHERE id=?", (title, cat_id))
+
+    async def set_category_description(self, cat_id: int, description: str | None):
+        await self._exec("UPDATE categories SET description=? WHERE id=?", (description or None, cat_id))
+
+    async def toggle_category(self, cat_id: int):
+        await self._exec("UPDATE categories SET is_active=1-is_active WHERE id=?", (cat_id,))
+
+    async def delete_category(self, cat_id: int):
+        """Murojaatlari bo'lsa — yashirin o'chiriladi (tarix va hisobotlarda nomi qoladi), aks holda butunlay."""
+        used = await self._scalar("SELECT count(*) FROM appeals WHERE category_id=?", (cat_id,))
+        if used:
+            await self._exec("UPDATE categories SET is_deleted=1, is_active=0 WHERE id=?", (cat_id,))
+        else:
+            await self._exec("DELETE FROM categories WHERE id=?", (cat_id,))
+
+    async def move_category(self, cat_id: int, delta: int):
+        """Tartibini bir pog'ona yuqoriga (-1) yoki pastga (+1) suradi."""
+        cat = await self.get_category(cat_id)
+        if not cat:
+            return
+        cats = await self.categories(cat["bot_id"])
+        ids = [c["id"] for c in cats]
+        i = ids.index(cat_id)
+        j = i + delta
+        if not 0 <= j < len(ids):
+            return
+        ids[i], ids[j] = ids[j], ids[i]
+        for pos, cid in enumerate(ids, start=1):
+            await self.conn.execute("UPDATE categories SET position=? WHERE id=?", (pos, cid))
+        await self.conn.commit()
+
+    async def category_stats(self, bot_id: int) -> list[dict]:
+        """Kategoriyalar kesimida holatlar (o'chirilganlari va «kategoriyasiz» ham)."""
+        return await self._all(
+            """SELECT c.title AS title, c.is_deleted AS is_deleted, count(ap.id) AS total,
+                      sum(ap.status IN ('new','in_progress')) AS open,
+                      sum(ap.status IN ('answered','closed')) AS done,
+                      sum(ap.status = 'rejected') AS rejected
+               FROM appeals ap LEFT JOIN categories c ON c.id = ap.category_id
+               WHERE ap.bot_id=? GROUP BY ap.category_id ORDER BY total DESC""",
+            (bot_id,),
+        )
 
     async def get_appeal(self, appeal_id: int):
         return await self._one(_APPEAL_SELECT + " WHERE ap.id=?", (appeal_id,))
@@ -372,7 +523,15 @@ class Database:
                 ph2 = ",".join("?" * len(people))
                 rows = await self._all(f"SELECT user_id, full_name FROM users WHERE user_id IN ({ph2})", list(people))
                 names = {r["user_id"]: r["full_name"] for r in rows}
-        return {"appeals": appeals, "messages": msgs, "events": events, "names": names}
+        # kategoriyalar: davrda murojaat bo'lmaganlari ham hisobotda 0 bilan ko'rinsin
+        cat_sql = """SELECT c.id, c.title, c.is_deleted, c.position, b.title AS bot_title
+                     FROM categories c JOIN bots b ON b.id = c.bot_id WHERE c.is_deleted = 0"""
+        cat_params: list = []
+        if bot_id is not None:
+            cat_sql += " AND c.bot_id = ?"
+            cat_params.append(bot_id)
+        categories = await self._all(cat_sql + " ORDER BY b.id, c.position, c.id", cat_params)
+        return {"appeals": appeals, "messages": msgs, "events": events, "names": names, "categories": categories}
 
     # ---------- kartalar ----------
     async def add_card(self, appeal_id: int, chat_id: int, message_id: int):
